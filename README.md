@@ -1,6 +1,8 @@
 # EESAST-hw2024-Async&Thread
 
-作业共两道题，任选一道题作答即可. 在提交的 PR 里需要注明作答了哪道题或者全部作答.
+作业共两道题，**任选一道题作答即可**. 在提交的 PR 里需要注明作答了哪道题或者全部作答.
+
+提交的 PR 中只需要看第二个部分 “No unresolved conversations”(绿色打勾) / “Unresolved conversations”(红色打叉)；**如果显示为后者，请按照 review comment 修改代码**.
 
 ## 第 1 题
 
