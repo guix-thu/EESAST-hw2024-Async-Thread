@@ -4,20 +4,19 @@ public class Program
 {
     public static void Main()
     {
-        // 测试用例: (a + b) + (c + d)
-        // 可以自行修改测试用例
+        // 测试用例: (a + b) * (c + d)
         ValueExpr a = new(1);
         ValueExpr b = new(2);
         ValueExpr c = new(3);
         ValueExpr d = new(4);
         AddExpr add1 = new(a, b);
         AddExpr add2 = new(c, d);
-        AddExpr add3 = new(add1, add2);
-        add3.WaitForAvailable();
-        Console.WriteLine(add3.Val);
+        MulExpr mul = new(add1, add2);
+        mul.WaitForAvailable();
+        Console.WriteLine(mul.Val);
         a.NewVal = 5;
-        add3.WaitForAvailable();
-        Console.WriteLine(add3.Val);
+        mul.WaitForAvailable();
+        Console.WriteLine(mul.Val);
     }
 }
 
@@ -177,56 +176,6 @@ public class BinaryExpr : Expr
             {
                 Unavilablize();
                 val = ExprFunc(ExprA.Val, ExprB.Val);
-                Available = true;
-            }
-        });
-        if (parent != null)
-        {
-            await parent.Update();
-        }
-    }
-
-    public override void Register(Expr parent)
-    {
-        this.parent = parent;
-        parent.Update();
-    }
-}
-
-class UnaryExpr : Expr
-{
-    int val = 0;
-    readonly object lockVal = new();
-    public override int Val
-    {
-        get
-        {
-            lock (lockVal)
-            {
-                return val;
-            }
-        }
-    }
-
-    public Expr ExprA;
-    public Func<int, int> ExprFunc { get; private set; }
-    public UnaryExpr(Expr A, Func<int, int> func)
-    {
-        ExprA = A;
-        ExprFunc = func;
-        SetParent(A, this);
-        val = ExprFunc(ExprA.Val);
-    }
-
-    public override async Task Update()
-    {
-        // 避免阻塞主线程   
-        await Task.Run(() =>
-        {
-            lock (lockVal)
-            {
-                Unavilablize();
-                val = ExprFunc(ExprA.Val);
                 Available = true;
             }
         });
