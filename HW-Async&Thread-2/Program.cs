@@ -77,8 +77,10 @@ public class TimeVariable(int initVal = 0, int lowerLimit = 0, int higherLimit =
     /// 思考：如何利用计时起点来完成变量值的更新？
     /// </summary>
     int time = Environment.TickCount;
+    static int Now => Environment.TickCount;
 
     int speed = initSpeed;
+    object lockSpeed = new();
     /// <summary>
     /// 变化速度，以毫秒计时
     /// </summary>
@@ -86,17 +88,26 @@ public class TimeVariable(int initVal = 0, int lowerLimit = 0, int higherLimit =
     {
         get
         {
-            // TODO 1:保护speed的读取
-            return speed;
+            lock (lockSpeed)
+            {
+                return speed;
+            }
         }
         set
         {
-            // TODO 2:请思考speed的改变如何体现在val的变化上？
-            speed = value;
+            lock (lockVal)
+            {
+                UpdateVal();
+            }
+            lock (lockSpeed)
+            {
+                speed = value;
+            }
         }
     }
 
     int val = initVal;
+    object lockVal = new();
     /// <summary>
     /// 变量的值
     /// </summary>
@@ -104,13 +115,30 @@ public class TimeVariable(int initVal = 0, int lowerLimit = 0, int higherLimit =
     {
         get
         {
-            // TODO 3:直接返回val是否是这个变量当前时刻的值？当然，可以有不同实现
-            return val;
+            lock (lockVal)
+            {
+                UpdateVal();
+                return val;
+            }
         }
         set
         {
-            // TODO 4:保护val的写入
-            val = value;
+            lock (lockVal)
+            {
+                time = Now;
+                val = value;
+            }
         }
+    }
+
+    void UpdateVal()
+    {
+        int now = Now;
+        val += (now - time) * speed;
+        time = now;
+        if (val < LowerLimit)
+            val = LowerLimit;
+        if (val > HigherLimit)
+            val = HigherLimit;
     }
 }
