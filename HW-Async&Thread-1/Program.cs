@@ -1,22 +1,35 @@
-﻿namespace HW_Async_Thread;
+﻿using System.Diagnostics;
+using System.Security.Cryptography;
+
+namespace HW_Async_Thread;
 
 public class Program
 {
     public static void Main()
     {
-        // 测试用例: (a + b) * (c + d)
-        ValueExpr a = new(1);
-        ValueExpr b = new(2);
-        ValueExpr c = new(3);
-        ValueExpr d = new(4);
-        AddExpr add1 = new(a, b);
-        AddExpr add2 = new(c, d);
-        MulExpr mul = new(add1, add2);
-        mul.WaitForAvailable();
-        Console.WriteLine(mul.Val);
-        a.NewVal = 5;
-        mul.WaitForAvailable();
-        Console.WriteLine(mul.Val);
+        int cnt = 0;
+        while (true)
+        {
+            // 测试用例: (a + b) * (c + d)
+            Console.WriteLine($"=={cnt++}==");
+            ValueExpr a = new(1);
+            ValueExpr b = new(2);
+            ValueExpr c = new(3);
+            ValueExpr d = new(4);
+            AddExpr add1 = new(a, b);
+            AddExpr add2 = new(c, d);
+            MulExpr mul = new(add1, add2);
+            mul.WaitForAvailable();
+            Console.WriteLine(mul.Val);
+            Debug.Assert(mul.Val == 21);
+            //Console.WriteLine(mul.modifiedCount);
+            //Thread.Sleep(1);
+            a.NewVal = 5;
+            mul.WaitForAvailable();
+            Console.WriteLine(mul.Val);
+            Debug.Assert(mul.Val == 49);
+            //Console.WriteLine(mul.modifiedCount);
+        }
     }
 }
 
@@ -40,18 +53,24 @@ public abstract class Expr
     /// 结点值是否可用，用于判断结点值是否已经更新完毕
     /// </summary>
     /// <value></value>
-    public bool Available { get; protected set; } = true;
+    public bool Available => modifiedCount <= 0;
+    // 需要等待的更新计数
+    public int modifiedCount = 0;
+    private object availableLock = new();
 
     public void WaitForAvailable()
     {
-        while (!Available) ;
+        if (!Available)
+            lock (availableLock)
+                if (!Monitor.Wait(availableLock, 1000)) Console.Write("没等到");
+        modifiedCount = 0;
     }
 
     /// <summary>
     /// 异步方法，它的作用是启动一个任务，推动结点自身及其父结点更新值
     /// 可以根据自身需求适当修改方法签名
     /// </summary>
-    public abstract Task Update();
+    public abstract Task Update(string? from = null);
 
     /// <summary>
     /// 注册父结点
@@ -64,13 +83,34 @@ public abstract class Expr
     {
         child.parent = parent;
     }
-    protected void Unavilablize()
+
+    public bool Unavailablize(string? from = null, bool recursively = true)
     {
+        from ??= ToString();
+        //if (this is BinaryExpr)
+            //Console.WriteLine($"{this} Unavailable from {from}");
+        //lock (availableLock)
+        modifiedCount++;
+        if (recursively && parent is not null)
+        {
+            parent.Unavailablize(from);
+            return true;
+        }
+        return false;
+    }
+    protected void Availablize(string? from = null)
+    {
+        //if (this is BinaryExpr)
+            //Console.WriteLine($"{this} Available from {from}");
+        if (!Available)
+            //lock (availableLock)
+            modifiedCount--;
         if (Available)
         {
-            Available = false;
-            parent?.Unavilablize();
+            lock (availableLock)
+                Monitor.PulseAll(availableLock);
         }
+
     }
 }
 
@@ -87,9 +127,7 @@ public class ValueExpr(int initVal) : Expr
         get
         {
             lock (lockVal)
-            {
                 return val;
-            }
         }
     }
 
@@ -101,29 +139,33 @@ public class ValueExpr(int initVal) : Expr
     {
         set
         {
+            Unavailablize();
             lock (lockVal)
             {
-                Unavilablize();
                 val = value;
-                Available = true;
             }
+            Availablize();
             parent?.Update();
         }
     }
 
-    public override async Task Update()
+    public override async Task Update(string? from = null)
     {
-        Available = true;
+        from ??= ToString();
+        Availablize(from);
         if (parent != null)
-        {
-            await parent.Update();
-        }
+            await parent.Update(from);
     }
 
     public override void Register(Expr parent)
     {
         this.parent = parent;
         parent.Update();
+    }
+
+    public override string ToString()
+    {
+        return val.ToString();
     }
 }
 
@@ -139,9 +181,7 @@ public class BinaryExpr : Expr
         get
         {
             lock (lockVal)
-            {
                 return val;
-            }
         }
     }
 
@@ -152,41 +192,50 @@ public class BinaryExpr : Expr
         ExprA = A;
         ExprB = B;
         ExprFunc = func;
-        // A.Register(this);
-        // B.Register(this);
-        /* 
-         * 直接对parent进行修改，而不是调用Register方法
-         * Register操作不可能对子树造成影响，只会对父节点及以上的节点值造成影响
-         * 而此处构造函数中已经进行了计算，使用Register造成了重复计算，白白浪费两倍时间 
-         */
+        Unavailablize();
         SetParent(A, this);
+        if (!A.Available) Unavailablize();
         SetParent(B, this);
-        val = ExprFunc(ExprA.Val, ExprB.Val);
-        // 尝试了通过调用 Update 以避免阻塞主线程，但会导致顺序混乱，未能解决
-        // Available = false;
-        // _ = Update();
+        if (!B.Available) Unavailablize();
+        _ = Update();
+        //_ = InitialUpdate();
+
     }
 
-    public override async Task Update()
+
+    private async Task InitialUpdate()
     {
-        // 避免阻塞主线程   
+        bool UnavailablizeParent = !Unavailablize();
         await Task.Run(() =>
         {
-            lock (lockVal)
-            {
-                Unavilablize();
-                val = ExprFunc(ExprA.Val, ExprB.Val);
-                Available = true;
-            }
+            //Unavailablize();
+            val = ExprFunc(ExprA.Val, ExprB.Val);
+            Availablize(ToString());
         });
         if (parent != null)
         {
+            if (UnavailablizeParent)
+                parent.Unavailablize();
             await parent.Update();
         }
+    }
+    public override async Task Update(string? from = null)
+    {        
+        from ??= ToString();
+        // 避免阻塞主线程   
+        await Task.Run(() =>
+        {
+            //Unavailablize();
+            val = ExprFunc(ExprA.Val, ExprB.Val);
+            Availablize(from);
+        });
+        if (parent != null)
+            await parent.Update(from);
     }
 
     public override void Register(Expr parent)
     {
+        parent.Unavailablize();
         this.parent = parent;
         parent.Update();
     }
@@ -195,15 +244,29 @@ public class BinaryExpr : Expr
 /// <summary>
 /// 加法运算表达式结点
 /// </summary>
-public class AddExpr(Expr A, Expr B) : BinaryExpr(A, B, (a, b) => {
-    Thread.Sleep(100);
+public class AddExpr(Expr A, Expr B) : BinaryExpr(A, B, (a, b) =>
+{
+    // Thread.Sleep(10);
     return a + b;
-}) { }
+})
+{
+    public override string ToString()
+    {
+        return $"{A}+{B}";
+    }
+}
 
 /// <summary>
 /// 乘法运算表达式结点
 /// </summary>
-public class MulExpr(Expr A, Expr B) : BinaryExpr(A, B, (a, b) => {
-    Thread.Sleep(100);
+public class MulExpr(Expr A, Expr B) : BinaryExpr(A, B, (a, b) =>
+{
+    // Thread.Sleep(10);
     return a * b;
-}) { }
+})
+{
+    public override string ToString()
+    {
+        return $"({A})*({B})";
+    }
+}
